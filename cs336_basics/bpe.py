@@ -3,9 +3,6 @@ import regex as re
 from collections import defaultdict, Counter
 from typing import Any, Iterable
 from multiprocessing import Pool
-
-from utils import log
-import os
 from typing import BinaryIO
 
 
@@ -371,19 +368,16 @@ def train_bpe(
                 representing that <token1> was merged with <token2>.
                 Merges are ordered by order of creation.
     """
-    with log("init vocab", log_enabled):
-        vocab_list = init_vocab(special_tokens)
+    vocab_list = init_vocab(special_tokens)
 
-    with log("find boundaries", log_enabled):
-        word_freq = read_file_and_count_words(
-            input_path,
-            special_tokens,
-            num_chunks=num_chunks,
-            num_processes=num_processes,
-        )
+    word_freq = read_file_and_count_words(
+        input_path,
+        special_tokens,
+        num_chunks=num_chunks,
+        num_processes=num_processes,
+    )
 
-    with log(f"compute_token_pair_frequency", log_enabled):
-        how_to_split, pair_stats = compute_pair_stats(word_freq)
+    how_to_split, pair_stats = compute_pair_stats(word_freq)
 
     def _sort_kv_by(
         kv: tuple[
