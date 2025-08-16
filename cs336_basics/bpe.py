@@ -5,7 +5,6 @@ from typing import Any, Iterable
 from multiprocessing import Pool
 from typing import BinaryIO
 
-
 ENCODING = "utf-8"
 PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 
@@ -150,187 +149,39 @@ def read_file_and_count_words(
     return add_dicts(list_of_word_frequency)
 
 
-def compute_pair_stats(
-    word_freq: dict[bytes, int],
-) -> tuple[
-    dict[bytes, list[bytes]],
-    dict[tuple[bytes, bytes], tuple[int, dict[bytes, int]]],
+class Token:
+    def __init__(self, data: bytes, freq: int, prev=None, next=None):
+        self.data = data
+        self.freq: int = freq
+        self.prev: Token = prev
+        self.next: Token = next
+
+    def __repr__(self) -> str:
+        return f"Token({self.data=}, {self.freq=})"
+
+
+def init_pair_occu_freq(word_freq: dict[bytes, int]) -> tuple[
+    dict[tuple[bytes, bytes], list[Token]],
+    dict[tuple[bytes, bytes], int],
 ]:
     """
     Returns:
-        how_to_split dict[bytes, list[bytes]]:
-            how_to_split[word] gives a list of bytes whose composition is equal to word
-            this is our current way of tokenizing the given word
-        pair_stats dict[tuple[bytes, bytes], tuple[int, dict[bytes, int]]]:
-            pair_stats[pair][0] is the frequency of this pair in the text
-            pair_stats[pair][1][word] is the number of times this pair shows up in word
+        pair_occu: dict[tuple[bytes, bytes], list[Token]]
+        pair_freq: dict[tuple[bytes, bytes], int]
     """
-    # how to split a word in the current vocab
-    # e.g. we might split "abc" into "a" and "bc"
-    how_to_split: dict[bytes, list[bytes]] = dict()
-
-    # int is pair frequency
-    # dict[bytes, int] maps from
-    #   the word in which the pair shows up in
-    #       to
-    #   the number of times this pair shows up in the word
-    pair_stats: dict[
-        tuple[bytes, bytes],
-        tuple[int, dict[bytes, int]],
-    ] = dict()
-
+    pair_occu: dict[tuple[bytes, bytes], list[Token]] = defaultdict(list)
+    pair_freq: dict[tuple[bytes, bytes], int] = defaultdict(int)
     for word, freq in word_freq.items():
-        split = [bytes([i]) for i in word]
-        how_to_split[word] = split
-        for pair in zip(split[:-1], split[1:]):
-            add_pair(pair, word, freq, pair_stats)
-    return how_to_split, pair_stats
-
-
-def add_pair(
-    pair: tuple[bytes, bytes],
-    word: bytes,
-    freq: int,
-    pair_stats: dict[
-        tuple[bytes, bytes],
-        tuple[int, dict[bytes, int]],
-    ],
-) -> None:
-    """
-    Helper function.
-    Inputs:
-        freq = the frequency of word in the text
-    """
-    if pair not in pair_stats:
-        pair_stats[pair] = (freq, defaultdict(int, {word: 1}))
-    else:
-        old_freq, old_dict = pair_stats[pair]
-        new_freq = old_freq + freq
-        old_dict[word] += 1
-        pair_stats[pair] = new_freq, old_dict
-
-
-def del_pair(
-    pair: tuple[bytes, bytes],
-    word: bytes,
-    freq: int,
-    pair_stats: dict[
-        tuple[bytes, bytes],
-        tuple[int, dict[bytes, int]],
-    ],
-) -> None:
-    """
-    Helper function.
-    Inputs:
-        freq = the frequency of word in the text
-    """
-    old_freq, old_dict = pair_stats[pair]
-
-    new_freq = old_freq - freq
-    old_dict[word] -= 1
-    if old_dict[word] == 0:
-        old_dict.pop(word)
-
-    if new_freq == 0:
-        assert len(old_dict) == 0
-        pair_stats.pop(pair)
-    else:
-        assert len(old_dict) > 0
-        pair_stats[pair] = new_freq, old_dict
-
-
-def resplit(
-    word: bytes,
-    word_freq: int,
-    pair: tuple[bytes, bytes],
-    how_to_split: dict[bytes, list[bytes]],
-    pair_stats: dict[
-        tuple[bytes, bytes],
-        tuple[int, dict[bytes, int]],
-    ],
-) -> None:
-    # print(f"{word=}")
-    # print(f"{pair=}")
-
-    old_split = how_to_split[word]
-    new_split, del_pairs, add_pairs = greedily_merge(old_split, pair)
-    how_to_split[word] = new_split
-
-    # print(f"{old_split=}")
-    # print(f"{new_split=}")
-
-    # print(f"{del_pairs=}")
-    # print(f"{add_pairs=}")
-
-    for del_pair, pairs_per_word in del_pairs.items():
-        # print(f"{pair_stats=}")
-        freq, old_dict = pair_stats.pop(del_pair)
-        freq -= word_freq * pairs_per_word
-        old_dict[word] -= pairs_per_word
-        if old_dict[word] == 0:
-            old_dict.pop(word)
-        if len(old_dict) == 0:
-            # assert len(old_dict) == 0, (del_pair, old_dict)
-            continue
-        pair_stats[del_pair] = freq, old_dict
-
-    for add_pair, pairs_per_word in add_pairs.items():
-        if add_pair in pair_stats:
-            freq, old_dict = pair_stats[add_pair]
-        else:
-            freq, old_dict = 0, defaultdict(int)
-        freq += word_freq * pairs_per_word
-        old_dict[word] += pairs_per_word
-        pair_stats[add_pair] = freq, old_dict
-
-
-def greedily_merge(
-    old_split: list[bytes],
-    pair: tuple[bytes, bytes],
-) -> tuple[
-    list[bytes],
-    dict[tuple[bytes, bytes], int],
-    dict[tuple[bytes, bytes], int],
-]:
-    """
-    Greedily merge all pairs in the old split.
-    Also computes how many pairs get deleted and how many pairs get added.
-
-    For example, if
-        old_split = (a, b, c, b, c)
-        pair = (b, c)
-    then
-        new_split = (a, bc, bc, d),
-        del_pairs = {(a, b): 1, (b, c): 2, (c, b): 1}
-        new_pairs = {(a, bc): 1, (bc, bc): 1, (bc, d): 1}
-    """
-    new_split = []
-    del_pairs: dict[tuple[bytes, bytes], int] = defaultdict(int)
-    add_pairs: dict[tuple[bytes, bytes], int] = defaultdict(int)
-
-    # shining
-    # del: hi, ni, ng
-    # add: hin, inin, ing
-
-    i = 0
-    just_merged = False
-    while i < len(old_split):
-        if i + 1 < len(old_split) and (old_split[i], old_split[i + 1]) == pair:
-            if i - 1 >= 0:
-                del_pairs[(old_split[i - 1], old_split[i])] += 1
-            if len(new_split) > 0:
-                add_pairs[(new_split[-1], b"".join(pair))] += 1
-            new_split.append(b"".join(pair))
-            i += 2
-            just_merged = True
-        else:
-            if just_merged:
-                del_pairs[(old_split[i - 1], old_split[i])] += 1
-                add_pairs[(new_split[-1], old_split[i])] += 1
-            new_split.append(old_split[i])
-            i += 1
-            just_merged = False
-    return new_split, del_pairs, add_pairs
+        prev: Token = None
+        for i in word:
+            data = bytes([i])
+            token = Token(data, freq, prev=prev)
+            if prev:
+                prev.next = token
+                pair_freq[(prev.data, data)] += freq
+                pair_occu[(prev.data, data)].append(prev)
+            prev = token
+    return pair_occu, pair_freq
 
 
 def train_bpe(
@@ -340,7 +191,6 @@ def train_bpe(
     *,
     num_chunks: int = 100,
     num_processes: int = 8,
-    log_enabled: bool = False,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """Given the path to an input corpus, run train a BPE tokenizer and
     output its vocabulary and merges.
@@ -377,31 +227,49 @@ def train_bpe(
         num_processes=num_processes,
     )
 
-    how_to_split, pair_stats = compute_pair_stats(word_freq)
+    pair_occu, pair_freq = init_pair_occu_freq(word_freq)
 
-    def _sort_kv_by(
-        kv: tuple[
-            tuple[bytes, bytes],
-            tuple[int, dict[bytes, int]],
-        ],
-    ):
-        pair, stats = kv
-        freq, _ = stats
+    def _sort_kv_by(kv: tuple[tuple[bytes, bytes], int]):
+        pair, freq = kv
         return (freq, pair)
 
     merges: list[tuple[bytes, bytes]] = []
-    while len(vocab_list) < vocab_size and len(pair_stats) > 0:
-        pair, (_, words) = max(pair_stats.items(), key=_sort_kv_by)
-        words = words.keys()
+    while len(vocab_list) < vocab_size and len(pair_freq) > 0:
+        pair, _ = max(pair_freq.items(), key=_sort_kv_by)
+        pair_freq.pop(pair)
 
-        vocab_list.append(b"".join(pair))
+        new_vocab = b"".join(pair)
+        vocab_list.append(new_vocab)
         merges.append(pair)
 
-        for word in words:
-            # update how_to_split and pair_stats
-            resplit(word, word_freq[word], pair, how_to_split, pair_stats)
+        while pair_occu[pair]:
+            token = pair_occu[pair][0]
 
-        pair_stats.pop(pair)
+            # (a, b, c, d) -> (a, bc, d)
+            b = token
+            del token
+            a = b.prev
+            c = b.next
+            assert c is not None
+            d = c.next
+            freq = b.freq
+
+            bc = Token(new_vocab, freq, prev=a, next=d)
+
+            # keep pair_freq and pair_occu up to date
+            if a is not None:
+                pair_freq[(a.data, b.data)] -= freq
+                pair_occu[(a.data, b.data)].remove(a)
+                a.next = bc
+                pair_freq[(a.data, bc.data)] += freq
+                pair_occu[(a.data, bc.data)].append(a)
+            if d is not None:
+                pair_freq[(c.data, d.data)] -= freq
+                pair_occu[(c.data, d.data)].remove(c)
+                pair_freq[(bc.data, d.data)] += freq
+                pair_occu[(bc.data, d.data)].append(bc)
+                d.prev = bc
+            pair_occu[pair].remove(b)
 
     vocab_dict: dict[int, bytes] = {i: b for i, b in enumerate(vocab_list)}
     return vocab_dict, merges
