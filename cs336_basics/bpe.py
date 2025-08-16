@@ -150,38 +150,105 @@ def read_file_and_count_words(
 
 
 class Token:
-    def __init__(self, data: bytes, freq: int, prev=None, next=None):
+    def __init__(self, data: bytes, freq: int, ord: int, prev=None, next=None):
+        """
+        freq: the frequency of the word to which this token belongs.
+        ord: the position of this token in the word to which it belongs.
+        """
         self.data = data
         self.freq: int = freq
         self.prev: Token = prev
         self.next: Token = next
+        self.ord: int = ord
 
     def __repr__(self) -> str:
-        return f"Token({self.data=}, {self.freq=})"
+        return f"Token({self.data=}, {self.freq=}, {self.ord=})"
 
 
 def init_pair_occu_freq(word_freq: dict[bytes, int]) -> tuple[
-    dict[tuple[bytes, bytes], list[Token]],
+    dict[tuple[bytes, bytes], set[Token]],
     dict[tuple[bytes, bytes], int],
 ]:
     """
     Returns:
-        pair_occu: dict[tuple[bytes, bytes], list[Token]]
+        pair_occu: dict[tuple[bytes, bytes], set[Token]]
         pair_freq: dict[tuple[bytes, bytes], int]
     """
-    pair_occu: dict[tuple[bytes, bytes], list[Token]] = defaultdict(list)
+    pair_occu: dict[tuple[bytes, bytes], set[Token]] = defaultdict(set)
     pair_freq: dict[tuple[bytes, bytes], int] = defaultdict(int)
     for word, freq in word_freq.items():
         prev: Token = None
-        for i in word:
+        for ord, i in enumerate(word):
             data = bytes([i])
-            token = Token(data, freq, prev=prev)
+            token = Token(data, freq, ord=ord, prev=prev)
             if prev:
                 prev.next = token
                 pair_freq[(prev.data, data)] += freq
-                pair_occu[(prev.data, data)].append(prev)
+                pair_occu[(prev.data, data)].add(prev)
             prev = token
     return pair_occu, pair_freq
+
+
+def get_most_common_pair(
+    pair_freq: dict[tuple[bytes, bytes], int],
+) -> tuple[bytes, bytes]:
+    """
+    This implementation is much faster than
+        max(pair_freq.items(), key=lamda kv: (kv[1], kv[0]))[0]
+    probably because comparing two bytes is slow.
+    """
+    candidates: set[tuple[bytes, bytes]] = set()
+    max_freq = 0
+    for pair, freq in pair_freq.items():
+        if freq > max_freq:
+            candidates = {pair}
+            max_freq = freq
+        elif freq == max_freq:
+            candidates.add(pair)
+    return max(candidates)
+
+
+def merge_bc(
+    token: Token,
+    pair_occu: dict[tuple[bytes, bytes], set[Token]],
+    pair_freq: dict[tuple[bytes, bytes], int],
+):
+    """
+    Merge token with token.next.
+    Update pair_occu and pair_freq accordingly.
+    """
+    # (a, b, c, d) -> (a, bc, d)
+
+    b = token
+    del token
+    a = b.prev
+    c = b.next
+    assert c is not None
+    d = c.next
+    freq = b.freq
+
+    pair_occu[(b.data, c.data)].remove(b)
+
+    b.next = d
+    if d is not None:
+        d.prev = b
+
+    # keep pair_freq and pair_occu up to date
+    if a is not None:
+        pair_freq[(a.data, b.data)] -= freq
+        pair_occu[(a.data, b.data)].remove(a)
+    if d is not None:
+        pair_freq[(c.data, d.data)] -= freq
+        pair_occu[(c.data, d.data)].remove(c)
+
+    b.data = b"".join([b.data, c.data])
+
+    if a is not None:
+        pair_freq[(a.data, b.data)] += freq
+        pair_occu[(a.data, b.data)].add(a)
+    if d is not None:
+        pair_freq[(b.data, d.data)] += freq
+        pair_occu[(b.data, d.data)].add(b)
 
 
 def train_bpe(
@@ -227,49 +294,28 @@ def train_bpe(
         num_processes=num_processes,
     )
 
+    # pair_occu[bytes pair] = list[token: (token.data, token.next.data) = bytes pair]
+    # pair_freq[bytes pair] = the frequency of this bytes pair in the whole text
     pair_occu, pair_freq = init_pair_occu_freq(word_freq)
-
-    def _sort_kv_by(kv: tuple[tuple[bytes, bytes], int]):
-        pair, freq = kv
-        return (freq, pair)
+    del word_freq
 
     merges: list[tuple[bytes, bytes]] = []
     while len(vocab_list) < vocab_size and len(pair_freq) > 0:
-        pair, _ = max(pair_freq.items(), key=_sort_kv_by)
-        pair_freq.pop(pair)
+        pair = get_most_common_pair(pair_freq)
+        del pair_freq[pair]
 
+        # update vocab_list and merges with the selected pair
         new_vocab = b"".join(pair)
         vocab_list.append(new_vocab)
         merges.append(pair)
 
-        while pair_occu[pair]:
-            token = pair_occu[pair][0]
-
-            # (a, b, c, d) -> (a, bc, d)
-            b = token
-            del token
-            a = b.prev
-            c = b.next
-            assert c is not None
-            d = c.next
-            freq = b.freq
-
-            bc = Token(new_vocab, freq, prev=a, next=d)
-
-            # keep pair_freq and pair_occu up to date
-            if a is not None:
-                pair_freq[(a.data, b.data)] -= freq
-                pair_occu[(a.data, b.data)].remove(a)
-                a.next = bc
-                pair_freq[(a.data, bc.data)] += freq
-                pair_occu[(a.data, bc.data)].append(a)
-            if d is not None:
-                pair_freq[(c.data, d.data)] -= freq
-                pair_occu[(c.data, d.data)].remove(c)
-                pair_freq[(bc.data, d.data)] += freq
-                pair_occu[(bc.data, d.data)].append(bc)
-                d.prev = bc
-            pair_occu[pair].remove(b)
+        # For several collapsible token pairs in the same word,
+        # we always collapse the leftmost token pair first.
+        sorted_tokens = sorted(pair_occu[pair], key=lambda x: x.ord)
+        for token in sorted_tokens:
+            if token in pair_occu[pair]:
+                merge_bc(token, pair_occu, pair_freq)
+        del pair_occu[pair]
 
     vocab_dict: dict[int, bytes] = {i: b for i, b in enumerate(vocab_list)}
     return vocab_dict, merges
