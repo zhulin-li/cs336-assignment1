@@ -128,7 +128,9 @@ class Tokenizer:
 
         return ids
 
-    def encode(self, text: str) -> list[int]:
+    def encode(
+        self, text: str, *, word2ids_cache: dict[bytes, list[int]] = dict()
+    ) -> list[int]:
         """
         Encode an input text into a sequence of token IDs.
         Assume that `text` fits into memory.
@@ -143,16 +145,17 @@ class Tokenizer:
 
         ids: list[int] = []
         for chunk in chunks:
-            # # due to regex splitting, empty string appears
-            # # before / after special tokens
-            # if chunk == "":
-            #     continue
             if chunk in self.special_token_to_id:
                 ids += [self.special_token_to_id[chunk]]
             else:
                 for match in re.finditer(PAT, chunk):
                     word: bytes = match.group().encode(encoding=ENCODING)
-                    ids += self.word2ids(word)
+                    if word in word2ids_cache:
+                        ids += word2ids_cache[word]
+                    else:
+                        x = self.word2ids(word)
+                        word2ids_cache[word] = x
+                        ids += x
         return ids
 
     def encode_iterable(self, iterable: Iterable[str]) -> Iterator[int]:
@@ -162,8 +165,18 @@ class Tokenizer:
         memory-eﬀicient tokenization of large files that we cannot directly
         load into memory.
         """
+        word2ids_cache: dict[bytes, list[int]] = dict()
+        buffer = ""
         for text in iterable:
-            yield from self.encode(text)
+            buffer += text
+            while len(buffer) > 1_000_000:
+                matches = list(re.finditer(PAT, buffer))
+                assert len(matches) > 0
+                last_match_end = matches[-1].end()
+                to_process = buffer[:last_match_end]
+                buffer = buffer[last_match_end:]
+                yield from self.encode(to_process, word2ids_cache=word2ids_cache)
+        yield from self.encode(buffer, word2ids_cache=word2ids_cache)
 
     def decode(self, ids: list[int]) -> str:
         """
