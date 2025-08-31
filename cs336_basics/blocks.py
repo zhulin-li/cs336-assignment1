@@ -141,3 +141,14 @@ class RoPE(nn.Module):
             pair=2,
         )
         return x
+
+
+class SoftMax(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: torch.Tensor, dim: int) -> torch.Tensor:
+        x -= torch.max(x, dim=dim, keepdim=True).values
+        x = torch.exp(x)
+        x /= torch.sum(x, dim=dim, keepdim=True)
+        return x
