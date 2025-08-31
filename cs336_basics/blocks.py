@@ -1,6 +1,6 @@
 from torch import nn
 import torch
-from einops import einsum
+from einops import einsum, reduce, rearrange
 import math
 
 
@@ -41,3 +41,25 @@ class Embedding(nn.Module):
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         return self.weight[token_ids]
+
+
+class RMSNorm(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        eps: float = 1e-5,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        super().__init__()
+        self.eps = eps
+        factory_kwargs = {"device": device, "dtype": dtype}
+        self.gain = nn.Parameter(torch.empty(d_model, **factory_kwargs))
+        nn.init.ones_(self.gain)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_dtype = x.dtype
+        x = x.to(torch.float32)
+        rms = (reduce(x.square(), "b s d -> b s", "mean") + self.eps).sqrt()
+        x = x / rearrange(rms, "b s -> b s 1") * rearrange(self.gain, "d -> 1 1 d")
+        return x.to(x_dtype)
