@@ -8,7 +8,7 @@ from jaxtyping import Float, Int
 import numpy.typing as npt
 import torch
 from torch import Tensor
-from cs336_basics.blocks import Linear, Embedding, RMSNorm
+from cs336_basics.blocks import Linear, Embedding, RMSNorm, SwiGLU
 
 
 def run_linear(
@@ -80,6 +80,11 @@ def run_swiglu(
     Returns:
         Float[Tensor, "... d_model"]: Output embeddings of the same shape as the input embeddings.
     """
+    model = SwiGLU(d_model, d_ff)
+    model.load_state_dict(
+        {"W1.weight": w1_weight, "W2.weight": w2_weight, "W3.weight": w3_weight}
+    )
+    return model(in_features)
     # Example:
     # If your state dict keys match, you can use `load_state_dict()`
     # swiglu.load_state_dict(weights)

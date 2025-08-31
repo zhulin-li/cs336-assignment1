@@ -63,3 +63,25 @@ class RMSNorm(nn.Module):
         rms = (reduce(x.square(), "b s d -> b s", "mean") + self.eps).sqrt()
         x = x / rearrange(rms, "b s -> b s 1") * rearrange(self.gain, "d -> 1 1 d")
         return x.to(x_dtype)
+
+
+class SwiGLU(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int | None = None,
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        super().__init__()
+        factory_kwargs = {"device": device, "dtype": dtype}
+        if d_ff is None:
+            d_ff = int(d_model * 8 / 3 / 64) * 64
+        self.W1 = Linear(d_model, d_ff, **factory_kwargs)
+        self.W2 = Linear(d_ff, d_model, **factory_kwargs)
+        self.W3 = Linear(d_model, d_ff, **factory_kwargs)
+
+        self.silu = lambda x: x * torch.sigmoid(x)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.W2(self.silu(self.W1(x)) * self.W3(x))
