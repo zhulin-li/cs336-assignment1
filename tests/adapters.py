@@ -8,7 +8,7 @@ from jaxtyping import Float, Int
 import numpy.typing as npt
 import torch
 from torch import Tensor
-from cs336_basics.blocks import Linear
+from cs336_basics.blocks import Linear, Embedding
 
 
 def run_linear(
@@ -53,8 +53,9 @@ def run_embedding(
     Returns:
         Float[Tensor, "... d_model"]: Batch of embeddings returned by your Embedding layer.
     """
-
-    raise NotImplementedError
+    model = Embedding(vocab_size, d_model)
+    model.load_state_dict({"weight": weights})
+    return model(token_ids)
 
 
 def run_swiglu(
@@ -86,7 +87,6 @@ def run_swiglu(
     # swiglu.w1.weight.data = w1_weight
     # swiglu.w2.weight.data = w2_weight
     # swiglu.w3.weight.data = w3_weight
-    raise NotImplementedError
 
 
 def run_scaled_dot_product_attention(
