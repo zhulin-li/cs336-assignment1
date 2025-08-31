@@ -8,7 +8,7 @@ from jaxtyping import Float, Int
 import numpy.typing as npt
 import torch
 from torch import Tensor
-from cs336_basics.blocks import Linear, Embedding, RMSNorm, SwiGLU, RoPE, SoftMax
+from cs336_basics.blocks import Linear, Embedding, RMSNorm, SwiGLU, RoPE, softmax
 
 
 def run_linear(
@@ -442,8 +442,7 @@ def run_softmax(in_features: Float[Tensor, " ..."], dim: int) -> Float[Tensor, "
         Float[Tensor, "..."]: Tensor of with the same shape as `in_features` with the output of
         softmax normalizing the specified `dim`.
     """
-    model = SoftMax()
-    return model(in_features, dim)
+    return softmax(in_features, dim)
 
 
 def run_cross_entropy(
