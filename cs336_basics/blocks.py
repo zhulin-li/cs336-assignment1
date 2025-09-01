@@ -1,6 +1,6 @@
 from torch import nn
 import torch
-from einops import einsum, reduce, rearrange
+from einops import einsum, reduce, rearrange, repeat
 import math
 
 
@@ -169,3 +169,67 @@ def scaled_dot_product_self_attention(
         "... seq_len_q seq_len_k, ... seq_len_k d_v -> ... seq_len_q d_v",
     )
     return result
+
+
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        theta: float | None = None,  # RoPE
+        max_seq_len: int | None = None,  # RoPE
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        super().__init__()
+        factory_kwargs = {"device": device, "dtype": dtype}
+
+        assert d_model % num_heads == 0
+        self.num_heads = num_heads
+        d_k = d_model // num_heads
+
+        self.WQ = Linear(d_model, d_model, **factory_kwargs)
+        self.WK = Linear(d_model, d_model, **factory_kwargs)
+        self.WV = Linear(d_model, d_model, **factory_kwargs)
+        self.WO = Linear(d_model, d_model, **factory_kwargs)
+
+        assert (theta is None) == (max_seq_len is None)
+        if theta is None:
+            self.rope = None
+        else:
+            self.rope = RoPE(theta, d_k, max_seq_len, device=device)
+
+    def forward(
+        self, x: torch.Tensor, token_positions: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        seq_len = x.shape[-2]
+        device = x.device
+
+        query = self.WQ(x)
+        key = self.WK(x)
+        value = self.WV(x)
+
+        pattern = "... seq_len (num_heads d_k) -> ... num_heads seq_len d_k"
+        query = rearrange(query, pattern, num_heads=self.num_heads)
+        key = rearrange(key, pattern, num_heads=self.num_heads)
+        value = rearrange(value, pattern, num_heads=self.num_heads)
+
+        assert (self.rope is None) == (token_positions is None)
+        if self.rope is not None:
+            # RoPE on each attention head
+            # RoPE on query and key, but not on value
+            token_positions = repeat(
+                token_positions,
+                "... seq_len -> ... num_heads seq_len",
+                num_heads=self.num_heads,
+            )
+            query = self.rope(query, token_positions)
+            key = self.rope(key, token_positions)
+
+        mask = torch.tril(torch.ones(seq_len, seq_len, device=device)).bool()
+        output = scaled_dot_product_self_attention(query, key, value, mask)
+        resverse_pattern = "... num_heads seq_len d_k -> ... seq_len (num_heads d_k)"
+        output = rearrange(output, resverse_pattern)
+
+        output = self.WO(output)
+        return output
