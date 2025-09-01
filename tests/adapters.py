@@ -20,6 +20,7 @@ from cs336_basics.blocks import (
     TransformerBlock,
     TransformerLM,
 )
+from cs336_basics.loss import cross_entropy_loss
 
 
 def run_linear(
@@ -495,7 +496,7 @@ def run_cross_entropy(
     Returns:
         Float[Tensor, ""]: The average cross-entropy loss across examples.
     """
-    raise NotImplementedError
+    return cross_entropy_loss(inputs, targets)
 
 
 def run_gradient_clipping(
