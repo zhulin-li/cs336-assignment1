@@ -54,14 +54,14 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         factory_kwargs = {"device": device, "dtype": dtype}
-        self.gain = nn.Parameter(torch.empty(d_model, **factory_kwargs))
-        nn.init.ones_(self.gain)
+        self.weight = nn.Parameter(torch.empty(d_model, **factory_kwargs))
+        nn.init.ones_(self.weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x_dtype = x.dtype
         x = x.to(torch.float32)
         rms = (reduce(x.square(), "b s d -> b s", "mean") + self.eps).sqrt()
-        x = x / rearrange(rms, "b s -> b s 1") * rearrange(self.gain, "d -> 1 1 d")
+        x = x / rearrange(rms, "b s -> b s 1") * rearrange(self.weight, "d -> 1 1 d")
         return x.to(x_dtype)
 
 
@@ -77,14 +77,14 @@ class SwiGLU(nn.Module):
         factory_kwargs = {"device": device, "dtype": dtype}
         if d_ff is None:
             d_ff = int(d_model * 8 / 3 / 64) * 64
-        self.W1 = Linear(d_model, d_ff, **factory_kwargs)
-        self.W2 = Linear(d_ff, d_model, **factory_kwargs)
-        self.W3 = Linear(d_model, d_ff, **factory_kwargs)
+        self.w1 = Linear(d_model, d_ff, **factory_kwargs)
+        self.w2 = Linear(d_ff, d_model, **factory_kwargs)
+        self.w3 = Linear(d_model, d_ff, **factory_kwargs)
 
         self.silu = lambda x: x * torch.sigmoid(x)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.W2(self.silu(self.W1(x)) * self.W3(x))
+        return self.w2(self.silu(self.w1(x)) * self.w3(x))
 
 
 class RoPE(nn.Module):
@@ -188,10 +188,10 @@ class MultiHeadSelfAttention(nn.Module):
         self.num_heads = num_heads
         d_k = d_model // num_heads
 
-        self.WQ = Linear(d_model, d_model, **factory_kwargs)
-        self.WK = Linear(d_model, d_model, **factory_kwargs)
-        self.WV = Linear(d_model, d_model, **factory_kwargs)
-        self.WO = Linear(d_model, d_model, **factory_kwargs)
+        self.q_proj = Linear(d_model, d_model, **factory_kwargs)
+        self.k_proj = Linear(d_model, d_model, **factory_kwargs)
+        self.v_proj = Linear(d_model, d_model, **factory_kwargs)
+        self.output_proj = Linear(d_model, d_model, **factory_kwargs)
 
         assert (theta is None) == (max_seq_len is None)
         if theta is None:
@@ -205,9 +205,9 @@ class MultiHeadSelfAttention(nn.Module):
         seq_len = x.shape[-2]
         device = x.device
 
-        query = self.WQ(x)
-        key = self.WK(x)
-        value = self.WV(x)
+        query = self.q_proj(x)
+        key = self.k_proj(x)
+        value = self.v_proj(x)
 
         pattern = "... seq_len (num_heads d_k) -> ... num_heads seq_len d_k"
         query = rearrange(query, pattern, num_heads=self.num_heads)
@@ -231,5 +231,40 @@ class MultiHeadSelfAttention(nn.Module):
         resverse_pattern = "... num_heads seq_len d_k -> ... seq_len (num_heads d_k)"
         output = rearrange(output, resverse_pattern)
 
-        output = self.WO(output)
+        output = self.output_proj(output)
         return output
+
+
+class TransformerBlock(nn.Module):
+    def __init__(
+        self,
+        d_model: int,
+        num_heads: int,
+        d_ff: int,
+        theta: float | None = None,  # RoPE
+        max_seq_len: int | None = None,  # RoPE
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        super().__init__()
+        factory_kwargs = {"device": device, "dtype": dtype}
+
+        self.ln1 = RMSNorm(d_model, **factory_kwargs)
+        self.attn = MultiHeadSelfAttention(
+            d_model, num_heads, theta, max_seq_len, **factory_kwargs
+        )
+        self.ln2 = RMSNorm(d_model, **factory_kwargs)
+        self.ffn = SwiGLU(d_model, d_ff, **factory_kwargs)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len, d_model = x.shape
+        device = x.device
+
+        token_positions = repeat(
+            torch.arange(seq_len, device=device),
+            "seq_len -> batch_size seq_len",
+            batch_size=batch_size,
+        )
+        x = x + self.attn(self.ln1(x), token_positions)
+        x = x + self.ffn(self.ln2(x))
+        return x
