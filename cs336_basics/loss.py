@@ -41,17 +41,18 @@ class AdamW(torch.optim.Optimizer):
             for p in group["params"]:
                 if p.grad is None:
                     continue
+                grad = p.grad.data
 
                 state = self.state[p]
                 m1 = state.get("first_moment", 0)
                 m2 = state.get("second_moment", 0)
                 t = state.get("t", 1)
 
-                m1 = m1 * beta_1 + p.grad * (1 - beta_1)
-                m2 = m2 * beta_2 + p.grad**2 * (1 - beta_2)
+                m1 = m1 * beta_1 + grad * (1 - beta_1)
+                m2 = m2 * beta_2 + grad**2 * (1 - beta_2)
 
                 adjusted_lr = lr * math.sqrt(1 - beta_2**t) / (1 - beta_1**t)
-                p.data -= adjusted_lr * m1 / math.sqrt(m2 + eps)
+                p.data -= adjusted_lr * m1 / torch.sqrt(m2 + eps)
                 p.data *= 1 - lr * weight_decay
 
                 state["first_moment"] = m1
