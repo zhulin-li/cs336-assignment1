@@ -22,6 +22,7 @@ from cs336_basics.blocks import (
 )
 from cs336_basics.loss import cross_entropy_loss, AdamW
 from cs336_basics.lr import cosine_lr_schedule
+from cs336_basics.gradient_clipping import clip_gradients_
 
 
 def run_linear(
@@ -511,7 +512,7 @@ def run_gradient_clipping(
 
     The gradients of the parameters (parameter.grad) should be modified in-place.
     """
-    raise NotImplementedError
+    clip_gradients_(parameters, max_l2_norm)
 
 
 def get_adamw_cls() -> Any:
