@@ -21,6 +21,7 @@ from cs336_basics.blocks import (
     TransformerLM,
 )
 from cs336_basics.loss import cross_entropy_loss, AdamW
+from cs336_basics.lr import cosine_lr_schedule
 
 
 def run_linear(
@@ -545,7 +546,9 @@ def run_get_lr_cosine_schedule(
     Returns:
         Learning rate at the given iteration under the specified schedule.
     """
-    raise NotImplementedError
+    return cosine_lr_schedule(
+        it, warmup_iters, cosine_cycle_iters, max_learning_rate, min_learning_rate
+    )
 
 
 def run_save_checkpoint(
