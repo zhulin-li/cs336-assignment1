@@ -24,6 +24,7 @@ from cs336_basics.loss import cross_entropy_loss, AdamW
 from cs336_basics.lr import cosine_lr_schedule
 from cs336_basics.gradient_clipping import clip_gradients_
 from cs336_basics.data_loading import load_data
+from cs336_basics.checkpoint import save_checkpoint, load_checkpoint
 
 
 def run_linear(
@@ -569,7 +570,7 @@ def run_save_checkpoint(
             we've completed.
         out (str | os.PathLike | BinaryIO | IO[bytes]): Path or file-like object to serialize the model, optimizer, and iteration to.
     """
-    raise NotImplementedError
+    save_checkpoint(model, optimizer, iteration, out)
 
 
 def run_load_checkpoint(
@@ -590,7 +591,7 @@ def run_load_checkpoint(
     Returns:
         int: the previously-serialized number of iterations.
     """
-    raise NotImplementedError
+    return load_checkpoint(src, model, optimizer)
 
 
 def get_tokenizer(
