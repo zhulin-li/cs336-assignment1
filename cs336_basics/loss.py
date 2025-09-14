@@ -1,6 +1,6 @@
 import torch
 from einops import reduce, rearrange
-from typing import Iterable, Optional, Callable
+from typing import Iterable, Optional, Callable, cast, Any
 import math
 
 
@@ -32,7 +32,7 @@ class AdamW(torch.optim.Optimizer):
 
     def step(self, closure: Optional[Callable] = None):
         loss = None if closure is None else closure()
-        for group in self.param_groups:
+        for group in cast(Iterable[torch.Tensor], self.param_groups):
             beta_1 = group["beta_1"]
             beta_2 = group["beta_2"]
             lr = group["lr"]
@@ -43,7 +43,7 @@ class AdamW(torch.optim.Optimizer):
                     continue
                 grad = p.grad.data
 
-                state = self.state[p]
+                state: dict[str, Any] = self.state[p]
                 m1 = state.get("first_moment", 0)
                 m2 = state.get("second_moment", 0)
                 t = state.get("t", 1)
@@ -52,8 +52,8 @@ class AdamW(torch.optim.Optimizer):
                 m2 = m2 * beta_2 + grad**2 * (1 - beta_2)
 
                 adjusted_lr = lr * math.sqrt(1 - beta_2**t) / (1 - beta_1**t)
-                p.data -= adjusted_lr * m1 / torch.sqrt(m2 + eps)
-                p.data *= 1 - lr * weight_decay
+                p.data.sub_(adjusted_lr * m1 / torch.sqrt(m2 + eps))
+                p.data.mul_(1 - lr * weight_decay)
 
                 state["first_moment"] = m1
                 state["second_moment"] = m2
