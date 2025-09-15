@@ -6,9 +6,11 @@ from cs336_basics.data_loading import load_data
 from cs336_basics.loss import cross_entropy_loss
 from cs336_basics.checkpoint import save_checkpoint
 from pathlib import Path
-import os, csv
+import os
 import random
 from cs336_basics.gradient_clipping import clip_gradients_
+import wandb
+from cs336_basics.lr import cosine_lr_schedule
 
 
 def set_seed(seed: int) -> None:
@@ -27,7 +29,10 @@ def train(
     num_layers: int,
     theta: float | None = None,  # RoPE
     # optimizer params
-    lr: float,
+    lr_max: float,
+    lr_min: float,
+    T_warm_up: int,
+    T_cosine: int,
     weight_decay: float,
     betas: tuple[float, float],
     eps: float,
@@ -35,12 +40,15 @@ def train(
     batch_size: int,
     context_length: int,
     num_batches: int,
-    checkpoint_freq_in_batches: int,
-    log_freq_in_batches: int,
-    val_fraction: float,
-    seed: int,
     gradient_clipping_max_l2_norm: float,
-    # other
+    # logging
+    checkpoint_freq_in_batches: int | None,
+    val_loss_freq_in_batches: int | None,
+    val_fraction: float,
+    # random stuff
+    seed: int,
+    project_name: str,
+    project_config: dict,  # only used in wandb
     device: str,
     dataset_filename: str,
     savedir: str,
@@ -61,16 +69,18 @@ def train(
         device,
         torch.float,
     )
+    lr = cosine_lr_schedule(iteration, T_warm_up, T_cosine, lr_max, lr_min)
     optimizer = AdamW(model.parameters(), lr, weight_decay, betas, eps)
     data = np.memmap(dataset_filename, dtype=np.int16, mode="r")
     val_size = int(len(data) * val_fraction)
     train_data, val_data = data[:-val_size], data[-val_size:]
 
-    with open(savedir / "loss.csv", mode="w", buffering=1, newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["batch", "train_loss", "val_loss"])
+    with wandb.init(project=project_name, config=project_config) as run:
         for iteration in range(num_batches):
             model.train()
+
+            lr = cosine_lr_schedule(iteration, T_warm_up, T_cosine, lr_max, lr_min)
+            optimizer.param_groups
             optimizer.zero_grad()
 
             train_inputs, train_targets = load_data(
@@ -78,19 +88,26 @@ def train(
             )
             logits = model(train_inputs)
             train_loss = cross_entropy_loss(logits, train_targets)
+            metrics = {"iteration": iteration, "train_loss": train_loss.item()}
 
             train_loss.backward()
             clip_gradients_(model.parameters(), gradient_clipping_max_l2_norm)
             optimizer.step()
 
-            if iteration % checkpoint_freq_in_batches == 0:
+            if (
+                checkpoint_freq_in_batches is not None
+                and iteration % checkpoint_freq_in_batches == 0
+            ):
                 save_checkpoint(
                     model,
                     optimizer,
                     iteration,
                     os.fspath(savedir / f"batch_{iteration}.pt"),
                 )
-            if iteration % log_freq_in_batches == 0:
+            if (
+                val_loss_freq_in_batches is not None
+                and iteration % val_loss_freq_in_batches == 0
+            ):
                 model.eval()
                 with torch.no_grad():
                     val_inputs, val_targets = load_data(
@@ -98,9 +115,9 @@ def train(
                     )
                     logits = model(val_inputs)
                     val_loss = cross_entropy_loss(logits, val_targets)
+                    metrics["val_loss"] = val_loss
 
-                writer.writerow([iteration, train_loss.item(), val_loss.item()])
-                f.flush()
+            run.log(**metrics)
 
     save_checkpoint(
         model, optimizer, iteration, os.fspath(savedir / f"final_{iteration}.pt")
